@@ -3,36 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRU Live Location Sharing</title>
+    <title>VRU Multi-User Live Tracking</title>
     
-    <!-- Leaflet CSS (สำหรับวาดแผนที่) -->
+    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         #map { height: 100vh; width: 100%; }
+        
+        /* กล่องแสดงสถานะมุมซ้ายบน */
         .info-card {
             position: absolute;
             top: 10px;
             left: 10px;
             z-index: 1000;
             background: rgba(255, 255, 255, 0.95);
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-            font-family: Arial, sans-serif;
-            max-width: 300px;
+            padding: 12px 16px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 280px;
         }
-        .info-card h3 { color: #007bff; margin-bottom: 5px; font-size: 16px; }
-        .info-card p { font-size: 13px; color: #333; margin-top: 3px; }
+        .info-card h3 { color: #007bff; font-size: 15px; margin-bottom: 4px; }
+        .info-card p { font-size: 12px; color: #444; margin-top: 2px; }
+        .online-count { font-weight: bold; color: #28a745; }
     </style>
 </head>
 <body>
 
     <div class="info-card">
-        <h3>📍 VRU Live Location Tracking</h3>
-        <p id="status">กำลังเชื่อมต่อกับระบบ...</p>
-        <p id="user-id">ID ของคุณ: -</p>
+        <h3>📍 VRU Multi-User Tracking</h3>
+        <p id="user-display">ผู้ใช้งาน: -</p>
+        <p id="status">กำลังเชื่อมต่อ...</p>
+        <p>ออนไลน์ขณะนี้: <span id="count" class="online-count">0</span> คน</p>
     </div>
 
     <div id="map"></div>
@@ -45,10 +49,10 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 
     <script>
-        // -----------------------------------------------------------
-        // 1. นำค่า firebaseConfig จากขั้นตอนที่ 1 มาวางแทนที่ตรงนี้
-        // -----------------------------------------------------------
-      const firebaseConfig = {
+        // ===============================================================
+        // 1. นำชุดคีย์ firebaseConfig จาก Firebase Console ของคุณมาวางตรงนี้
+        // ===============================================================
+       const firebaseConfig = {
   apiKey: "AIzaSyCribLuJXV3IywlXoX3K5opMjTwcScCMLo",
   authDomain: "vru-tracking-28c34.firebaseapp.com",
   databaseURL: "https://vru-tracking-28c34-default-rtdb.asia-southeast1.firebasedatabase.app",
@@ -58,13 +62,29 @@
   appId: "1:1035130568629:web:125628521690ea9deb63fc",
   measurementId: "G-S42FXFSR44"
 };
-        // เริ่มต้นการเชื่อมต่อ Firebase
+        // เริ่มต้นการใช้งาน Firebase
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
-        // -----------------------------------------------------------
-        // 2. ตั้งค่าแผนที่ให้โฟกัสไปที่ มรภ.วไลยอลงกรณ์ฯ (14.1332, 100.6133)
-        // -----------------------------------------------------------
+        // ===============================================================
+        // 2. ระบบระบุตัวตน (ตั้งชื่อผู้ใช้ + สุ่มสีหมุดประจำตัว)
+        // ===============================================================
+        let userName = prompt("กรุณากรอกชื่อของคุณเพื่อเข้าสู่แผนที่:", "ผู้ใช้งาน_" + Math.floor(Math.random() * 100));
+        if (!userName || userName.trim() === "") {
+            userName = "ผู้ใช้ปริศนา_" + Math.floor(Math.random() * 1000);
+        }
+        
+        // สร้าง ID เฉพาะสำหรับ Session นี้
+        const myUserId = "user_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+        
+        // สุ่มสีสำหรับหมุดของผู้ใช้คนนี้
+        const myColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+
+        document.getElementById('user-display').innerText = `ผู้ใช้งาน: ${userName}`;
+
+        // ===============================================================
+        // 3. ตั้งค่าแผนที่ มรภ.วไลยอลงกรณ์ฯ
+        // ===============================================================
         const map = L.map('map').setView([14.1332, 100.6133], 16);
         
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -72,72 +92,100 @@
             attribution: '© OpenStreetMap'
         }).addTo(map);
 
-        // สุ่ม ID ประจำตัวของผู้ใช้เครื่องนี้ (เช่น User_542)
-        const myUserId = "User_" + Math.floor(1000 + Math.random() * 9000);
-        document.getElementById('user-id').innerText = "ID ของคุณ: " + myUserId;
+        // วัตถุเก็บหมุดผู้ใช้ทุกคน { userId: markerObject }
+        const userMarkers = {};
 
-        // วัตถุสำหรับเก็บหมุดของทุกคนบนแผนที่
-        const markers = {};
+        // ===============================================================
+        // 4. ฝั่งส่งข้อมูล: อ่าน GPS เครื่องเรา แล้วอัปเดตขึ้น Firebase
+        // ===============================================================
+        const userRef = database.ref('locations/' + myUserId);
 
-        // -----------------------------------------------------------
-        // 3. อ่านค่า GPS ของเครื่องเรา แล้วส่งขึ้น Firebase
-        // -----------------------------------------------------------
+        // เมื่อปิดหน้าเว็บ ให้ลบข้อมูลพิกัดออกจาก Firebase ทันที เพื่อไม่ให้หมุดค้าง
+        userRef.onDisconnect().remove();
+
         if ("geolocation" in navigator) {
             navigator.geolocation.watchPosition(
                 (position) => {
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
 
-                    document.getElementById('status').innerText = "🟢 กำลังแชร์ตำแหน่งเรียลไทม์";
+                    document.getElementById('status').innerText = "🟢 ส่งพิกัดเรียลไทม์สำเร็จ";
 
-                    // บันทึกตำแหน่งเข้าคลังข้อมูล Firebase
-                    database.ref('locations/' + myUserId).set({
+                    // บันทึกพิกัด ชื่อ และสี ลงใน Firebase
+                    userRef.set({
+                        name: userName,
                         latitude: lat,
                         longitude: lng,
-                        timestamp: Date.now()
+                        color: myColor,
+                        lastSeen: Date.now()
                     });
                 },
                 (error) => {
                     document.getElementById('status').innerText = "🔴 ข้อผิดพลาด GPS: " + error.message;
                 },
                 {
-                    enableHighAccuracy: true, // เปิดความแม่นยำสูง
+                    enableHighAccuracy: true,
                     maximumAge: 0,
-                    timeout: 5000
+                    timeout: 10000
                 }
             );
         } else {
-            document.getElementById('status').innerText = "อุปกรณ์นี้ไม่รองรับ GPS";
+            document.getElementById('status').innerText = "อุปกรณ์ไม่รองรับ GPS";
         }
 
-        // -----------------------------------------------------------
-        // 4. ดึงตำแหน่งของทุกคนจาก Firebase มาปักหมุดบนแผนที่
-        // -----------------------------------------------------------
+        // ===============================================================
+        // 5. ฝั่งรับข้อมูล: คอยดึงพิกัดของทุกคนจาก Firebase มาปักหมุด
+        // ===============================================================
         database.ref('locations').on('value', (snapshot) => {
-            const data = snapshot.val();
-            if (!data) return;
+            const allUsersData = snapshot.val() || {};
+            
+            const activeUserIds = Object.keys(allUsersData);
+            document.getElementById('count').innerText = activeUserIds.length;
 
-            // วนลูปอ่านข้อมูลของผู้ใช้ทุกคน
-            Object.keys(data).forEach((userId) => {
-                const userLocation = data[userId];
-                const lat = userLocation.latitude;
-                const lng = userLocation.longitude;
+            // 5.1 วนลูปสร้าง/อัปเดตหมุดของทุกคนที่มีในระบบ
+            activeUserIds.forEach((id) => {
+                const userData = allUsersData[id];
+                const lat = userData.latitude;
+                const lng = userData.longitude;
+                const name = userData.name || id;
+                const color = userData.color || "#007bff";
+                const isMe = (id === myUserId);
 
-                // เช็คว่ามีหมุดของคนนี้อยู่บนแผนที่แล้วหรือยัง
-                if (markers[userId]) {
-                    // มีแล้ว -> เลื่อนตำแหน่งหมุดไปยังพิกัดใหม่
-                    markers[userId].setLatLng([lat, lng]);
+                // สร้างรูปหมุดเป็นวงกลมสีตามสีกำหนด
+                const markerIcon = L.divIcon({
+                    className: 'custom-pin',
+                    html: `<div style="
+                        background-color: ${color};
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 50%;
+                        border: 3px solid white;
+                        box-shadow: 0 0 5px rgba(0,0,0,0.5);
+                    "></div>`,
+                    iconSize: [18, 18],
+                    iconAnchor: [9, 9]
+                });
+
+                if (userMarkers[id]) {
+                    // หากมีหมุดอยู่แล้ว ให้เลื่อนตำแหน่ง
+                    userMarkers[id].setLatLng([lat, lng]);
                 } else {
-                    // ยังไม่มี -> สร้างหมุดใหม่
-                    const isMe = (userId === myUserId);
+                    // หากยังไม่มี ให้สร้างหมุดใหม่
+                    userMarkers[id] = L.marker([lat, lng], { icon: markerIcon }).addTo(map);
                     
-                    // ปักหมุดโดยเน้นสีต่างกันระหว่างเรากับคนอื่น
-                    markers[userId] = L.marker([lat, lng]).addTo(map)
-                        .bindPopup(isMe ? "<b>ตำแหน่งของคุณ</b>" : `<b>ผู้ใช้: ${userId}</b>`);
+                    const popupContent = isMe ? `<b>${name} (คุณ)</b>` : `<b>${name}</b>`;
+                    userMarkers[id].bindPopup(popupContent);
 
-                    if (isMe) {
-                        markers[userId].openPopup();
-                    }
+                    // ถ้าเป็นตำแหน่งของเราเอง ให้เปิด Popup ค้างไว้
+                    if (isMe) userMarkers[id].openPopup();
+                }
+            });
+
+            // 5.2 ลบหมุดของคนที่ปิดเว็บออกไปแล้วออกจากแผนที่
+            Object.keys(userMarkers).forEach((id) => {
+                if (!allUsersData[id]) {
+                    map.removeLayer(userMarkers[id]);
+                    delete userMarkers[id];
                 }
             });
         });
