@@ -3,102 +3,144 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRU Live Location Tracking</title>
+    <title>VRU Live Location Sharing</title>
     
-    <!-- ดึง CSS ของ Leaflet -->
+    <!-- Leaflet CSS (สำหรับวาดแผนที่) -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
-        #map {
-            height: 100vh;
-            width: 100%;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        #map { height: 100vh; width: 100%; }
         .info-card {
             position: absolute;
             top: 10px;
             left: 10px;
             z-index: 1000;
-            background: white;
+            background: rgba(255, 255, 255, 0.95);
             padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
             font-family: Arial, sans-serif;
+            max-width: 300px;
         }
+        .info-card h3 { color: #007bff; margin-bottom: 5px; font-size: 16px; }
+        .info-card p { font-size: 13px; color: #333; margin-top: 3px; }
     </style>
 </head>
 <body>
 
     <div class="info-card">
-        <h3>ระบบติดตามตำแหน่ง VRU</h3>
-        <p id="status">กำลังเชื่อมต่อ GPS...</p>
-        <p id="coordinates">Lat: - | Long: -</p>
+        <h3>📍 VRU Live Location Tracking</h3>
+        <p id="status">กำลังเชื่อมต่อกับระบบ...</p>
+        <p id="user-id">ID ของคุณ: -</p>
     </div>
 
     <div id="map"></div>
 
-    <!-- ดึง JavaScript ของ Leaflet -->
+    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
-    <script>
-        // 1. ตั้งค่าพิกัดเริ่มต้นไปที่ มหาวิทยาลัยราชภัฏวไลยอลงกรณ์ฯ (Lat: 14.1332, Long: 100.6133)
-        const vruLat = 14.1332;
-        const vruLng = 100.6133;
-        
-        // สร้างวัตถุแผนที่และกำหนดระดับการซูม (Zoom Level 16)
-        const map = L.map('map').setView([vruLat, vruLng], 16);
+    <!-- Firebase SDK v8 -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 
-        // 2. ดึงแผนที่ฐานจาก OpenStreetMap
+    <script>
+        // -----------------------------------------------------------
+        // 1. นำค่า firebaseConfig จากขั้นตอนที่ 1 มาวางแทนที่ตรงนี้
+        // -----------------------------------------------------------
+       const firebaseConfig = {
+  apiKey: "AIzaSyD-xxxxxxxxxxxxxxxxx",
+  authDomain: "vru-app.firebaseapp.com",
+  databaseURL: "https://vru-app-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "vru-app",
+  storageBucket: "vru-app.appspot.com",
+  messagingSenderId: "1234567890",
+  appId: "1:1234567890:web:abcdef123456"
+};
+
+        // เริ่มต้นการเชื่อมต่อ Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        // -----------------------------------------------------------
+        // 2. ตั้งค่าแผนที่ให้โฟกัสไปที่ มรภ.วไลยอลงกรณ์ฯ (14.1332, 100.6133)
+        // -----------------------------------------------------------
+        const map = L.map('map').setView([14.1332, 100.6133], 16);
+        
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
-            attribution: '© OpenStreetMap contributors'
+            attribution: '© OpenStreetMap'
         }).addTo(map);
 
-        // 3. ปักหมุดขอบเขตมหาวิทยาลัยวไลยอลงกรณ์ฯ ไว้เป็นจุดอ้างอิง
-        const vruMarker = L.marker([vruLat, vruLng]).addTo(map);
-        vruMarker.bindPopup("<b>มหาวิทยาลัยราชภัฏวไลยอลงกรณ์ฯ</b><br>ศูนย์กลางพื้นที่").openPopup();
+        // สุ่ม ID ประจำตัวของผู้ใช้เครื่องนี้ (เช่น User_542)
+        const myUserId = "User_" + Math.floor(1000 + Math.random() * 9000);
+        document.getElementById('user-id').innerText = "ID ของคุณ: " + myUserId;
 
-        // 4. ตัวแปรสำหรับเก็บหมุดติดตามตำแหน่งแบบ Real-time
-        let userMarker = null;
+        // วัตถุสำหรับเก็บหมุดของทุกคนบนแผนที่
+        const markers = {};
 
-        // 5. ฟังก์ชันสำหรับอัปเดตตำแหน่งเมื่อมีความเคลื่อนไหว
-        function onLocationFound(e) {
-            const lat = e.coords.latitude;
-            const lng = e.coords.longitude;
-
-            document.getElementById('status').innerText = "กำลังติดตามตำแหน่งเรียลไทม์";
-            document.getElementById('coordinates').innerText = `Lat: ${lat.toFixed(5)} | Long: ${lng.toFixed(5)}`;
-
-            // หากยังไม่มีหมุดของผู้ใช้ ให้สร้างใหม่
-            if (!userMarker) {
-                userMarker = L.circleMarker([lat, lng], {
-                    color: '#007bff',
-                    fillColor: '#007bff',
-                    fillOpacity: 0.8,
-                    radius: 10
-                }).addTo(map);
-                userMarker.bindPopup("ตำแหน่งปัจจุบันของคุณ");
-            } else {
-                // หากมีหมุดแล้ว ให้ย้ายตำแหน่งไปพิกัดใหม่
-                userMarker.setLatLng([lat, lng]);
-            }
-
-            // ซูมและเลื่อนแผนที่ตามตำแหน่งผู้ใช้
-            map.panTo([lat, lng]);
-        }
-
-        function onLocationError(err) {
-            document.getElementById('status').innerText = "ไม่สามารถเข้าถึง GPS ได้: " + err.message;
-        }
-
-        // 6. เริ่มติดตามตำแหน่งผ่าน Geolocation API ของเบราว์เซอร์
+        // -----------------------------------------------------------
+        // 3. อ่านค่า GPS ของเครื่องเรา แล้วส่งขึ้น Firebase
+        // -----------------------------------------------------------
         if ("geolocation" in navigator) {
-            navigator.geolocation.watchPosition(onLocationFound, onLocationError, {
-                enableHighAccuracy: true, // เปิดใช้ GPS ความแม่นยำสูง
-                timeout: 5000,
-                maximumAge: 0
-            });
+            navigator.geolocation.watchPosition(
+                (position) => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+
+                    document.getElementById('status').innerText = "🟢 กำลังแชร์ตำแหน่งเรียลไทม์";
+
+                    // บันทึกตำแหน่งเข้าคลังข้อมูล Firebase
+                    database.ref('locations/' + myUserId).set({
+                        latitude: lat,
+                        longitude: lng,
+                        timestamp: Date.now()
+                    });
+                },
+                (error) => {
+                    document.getElementById('status').innerText = "🔴 ข้อผิดพลาด GPS: " + error.message;
+                },
+                {
+                    enableHighAccuracy: true, // เปิดความแม่นยำสูง
+                    maximumAge: 0,
+                    timeout: 5000
+                }
+            );
         } else {
-            document.getElementById('status').innerText = "อุปกรณ์นี้ไม่รองรับ Geolocation";
+            document.getElementById('status').innerText = "อุปกรณ์นี้ไม่รองรับ GPS";
         }
+
+        // -----------------------------------------------------------
+        // 4. ดึงตำแหน่งของทุกคนจาก Firebase มาปักหมุดบนแผนที่
+        // -----------------------------------------------------------
+        database.ref('locations').on('value', (snapshot) => {
+            const data = snapshot.val();
+            if (!data) return;
+
+            // วนลูปอ่านข้อมูลของผู้ใช้ทุกคน
+            Object.keys(data).forEach((userId) => {
+                const userLocation = data[userId];
+                const lat = userLocation.latitude;
+                const lng = userLocation.longitude;
+
+                // เช็คว่ามีหมุดของคนนี้อยู่บนแผนที่แล้วหรือยัง
+                if (markers[userId]) {
+                    // มีแล้ว -> เลื่อนตำแหน่งหมุดไปยังพิกัดใหม่
+                    markers[userId].setLatLng([lat, lng]);
+                } else {
+                    // ยังไม่มี -> สร้างหมุดใหม่
+                    const isMe = (userId === myUserId);
+                    
+                    // ปักหมุดโดยเน้นสีต่างกันระหว่างเรากับคนอื่น
+                    markers[userId] = L.marker([lat, lng]).addTo(map)
+                        .bindPopup(isMe ? "<b>ตำแหน่งของคุณ</b>" : `<b>ผู้ใช้: ${userId}</b>`);
+
+                    if (isMe) {
+                        markers[userId].openPopup();
+                    }
+                }
+            });
+        });
     </script>
 </body>
+</html>
