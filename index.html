@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRU Live Location Tracking</title>
+    
+    <!-- ดึง CSS ของ Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        .info-card {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="info-card">
+        <h3>ระบบติดตามตำแหน่ง VRU</h3>
+        <p id="status">กำลังเชื่อมต่อ GPS...</p>
+        <p id="coordinates">Lat: - | Long: -</p>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- ดึง JavaScript ของ Leaflet -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // 1. ตั้งค่าพิกัดเริ่มต้นไปที่ มหาวิทยาลัยราชภัฏวไลยอลงกรณ์ฯ (Lat: 14.1332, Long: 100.6133)
+        const vruLat = 14.1332;
+        const vruLng = 100.6133;
+        
+        // สร้างวัตถุแผนที่และกำหนดระดับการซูม (Zoom Level 16)
+        const map = L.map('map').setView([vruLat, vruLng], 16);
+
+        // 2. ดึงแผนที่ฐานจาก OpenStreetMap
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // 3. ปักหมุดขอบเขตมหาวิทยาลัยวไลยอลงกรณ์ฯ ไว้เป็นจุดอ้างอิง
+        const vruMarker = L.marker([vruLat, vruLng]).addTo(map);
+        vruMarker.bindPopup("<b>มหาวิทยาลัยราชภัฏวไลยอลงกรณ์ฯ</b><br>ศูนย์กลางพื้นที่").openPopup();
+
+        // 4. ตัวแปรสำหรับเก็บหมุดติดตามตำแหน่งแบบ Real-time
+        let userMarker = null;
+
+        // 5. ฟังก์ชันสำหรับอัปเดตตำแหน่งเมื่อมีความเคลื่อนไหว
+        function onLocationFound(e) {
+            const lat = e.coords.latitude;
+            const lng = e.coords.longitude;
+
+            document.getElementById('status').innerText = "กำลังติดตามตำแหน่งเรียลไทม์";
+            document.getElementById('coordinates').innerText = `Lat: ${lat.toFixed(5)} | Long: ${lng.toFixed(5)}`;
+
+            // หากยังไม่มีหมุดของผู้ใช้ ให้สร้างใหม่
+            if (!userMarker) {
+                userMarker = L.circleMarker([lat, lng], {
+                    color: '#007bff',
+                    fillColor: '#007bff',
+                    fillOpacity: 0.8,
+                    radius: 10
+                }).addTo(map);
+                userMarker.bindPopup("ตำแหน่งปัจจุบันของคุณ");
+            } else {
+                // หากมีหมุดแล้ว ให้ย้ายตำแหน่งไปพิกัดใหม่
+                userMarker.setLatLng([lat, lng]);
+            }
+
+            // ซูมและเลื่อนแผนที่ตามตำแหน่งผู้ใช้
+            map.panTo([lat, lng]);
+        }
+
+        function onLocationError(err) {
+            document.getElementById('status').innerText = "ไม่สามารถเข้าถึง GPS ได้: " + err.message;
+        }
+
+        // 6. เริ่มติดตามตำแหน่งผ่าน Geolocation API ของเบราว์เซอร์
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition(onLocationFound, onLocationError, {
+                enableHighAccuracy: true, // เปิดใช้ GPS ความแม่นยำสูง
+                timeout: 5000,
+                maximumAge: 0
+            });
+        } else {
+            document.getElementById('status').innerText = "อุปกรณ์นี้ไม่รองรับ Geolocation";
+        }
+    </script>
+</body>
